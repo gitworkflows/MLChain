@@ -1,30 +1,124 @@
-# This workflow warns and then closes issues and PRs that have had no activity for a specified amount of time.
-#
-# You can adjust the behavior by modifying this file.
-# For more information, see:
-# https://github.com/actions/stale
-name: Mark stale issues and pull requests
+name: Style check
 
 on:
-  schedule:
-    - cron: '0 3 * * *'
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: style-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
-  stale:
-
+  python-style:
+    name: Python Style
     runs-on: ubuntu-latest
-    permissions:
-      issues: write
-      pull-requests: write
 
     steps:
-      - uses: actions/stale@v9
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check changed files
+        id: changed-files
+        uses: tj-actions/changed-files@v44
         with:
-          days-before-issue-stale: 15
-          days-before-issue-close: 3
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-          stale-issue-message: "Close due to it's no longer active, if you have any questions, you can reopen it."
-          stale-pr-message: "Close due to it's no longer active, if you have any questions, you can reopen it."
-          stale-issue-label: 'no-issue-activity'
-          stale-pr-label: 'no-pr-activity'
-          any-of-labels: 'duplicate,question,invalid,wontfix,no-issue-activity,no-pr-activity,enhancement,cant-reproduce,help-wanted'
+          files: api/**
+
+      - name: Install Poetry
+        uses: abatilo/actions-poetry@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        if: steps.changed-files.outputs.any_changed == 'true'
+        with:
+          python-version: '3.10'
+
+      - name: Python dependencies
+        if: steps.changed-files.outputs.any_changed == 'true'
+        run: poetry install -C api --only lint
+
+      - name: Ruff check
+        if: steps.changed-files.outputs.any_changed == 'true'
+        run: poetry run -C api ruff check ./api
+
+      - name: Dotenv check
+        if: steps.changed-files.outputs.any_changed == 'true'
+        run: poetry run -C api dotenv-linter ./api/.env.example ./web/.env.example
+
+      - name: Ruff formatter check
+        if: steps.changed-files.outputs.any_changed == 'true'
+        run: poetry run -C api ruff format --check ./api
+
+      - name: Lint hints
+        if: failure()
+        run: echo "Please run 'dev/reformat' to fix the fixable linting errors."
+
+  web-style:
+    name: Web Style
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./web
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check changed files
+        id: changed-files
+        uses: tj-actions/changed-files@v44
+        with:
+          files: web/**
+
+      - name: Setup NodeJS
+        uses: actions/setup-node@v4
+        if: steps.changed-files.outputs.any_changed == 'true'
+        with:
+          node-version: 20
+          cache: yarn
+          cache-dependency-path: ./web/package.json
+
+      - name: Web dependencies
+        if: steps.changed-files.outputs.any_changed == 'true'
+        run: yarn install --frozen-lockfile
+
+      - name: Web style check
+        if: steps.changed-files.outputs.any_changed == 'true'
+        run: yarn run lint
+
+
+  superlinter:
+    name: SuperLinter
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check changed files
+        id: changed-files
+        uses: tj-actions/changed-files@v44
+        with:
+          files: |
+            **.sh
+            **.yaml
+            **.yml
+            **Dockerfile
+            dev/**
+
+      - name: Super-linter
+        uses: super-linter/super-linter/slim@v6
+        if: steps.changed-files.outputs.any_changed == 'true'
+        env:
+          BASH_SEVERITY: warning
+          DEFAULT_BRANCH: main
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IGNORE_GENERATED_FILES: true
+          IGNORE_GITIGNORED_FILES: true
+          VALIDATE_BASH: true
+          VALIDATE_BASH_EXEC: true
+          # FIXME: temporarily disabled until api-docker.yaml's run script is fixed for shellcheck
+          # VALIDATE_GITHUB_ACTIONS: true
+          VALIDATE_DOCKERFILE_HADOLINT: true
+          VALIDATE_XML: true
+          VALIDATE_YAML: true
